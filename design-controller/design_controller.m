@@ -120,7 +120,13 @@ assert(responseInfo.Overshoot < maximumOvershoot, ...
     responseInfo.Overshoot, maximumOvershoot);
 
 %% Step response
+% The one-degree-of-freedom PID puts the same gains on the tracking error,
+% so the derivative term acts on the reference step.
 [outputStep, outputTime] = step(outputResponse, timeHorizon);
+oneDofOutput = feedback(loopTransfer, 1);
+[oneDofStep, oneDofTime] = step(oneDofOutput, timeHorizon);
+oneDofControl = minreal(feedbackController / (1 + loopTransfer));
+[oneDofControlStep, oneDofControlTime] = step(oneDofControl, timeHorizon);
 
 figure
 tiledlayout(2, 1)
@@ -128,19 +134,25 @@ tiledlayout(2, 1)
 nexttile
 plot(outputTime, outputStep, 'LineWidth', 1.2)
 hold on
-yline(1 + maximumOvershoot / 100, '--', '10% overshoot')
+plot(oneDofTime, oneDofStep, 'LineWidth', 1.2)
+yline(1 + maximumOvershoot / 100, '--', '10% overshoot', 'HandleVisibility', 'off')
 hold off
 xlabel('Time (s)')
 ylabel('y')
-title(sprintf('Output  |  rise %.2f s, overshoot %.1f%%', ...
+title(sprintf('Output  |  2-DOF rise %.2f s, overshoot %.1f%%', ...
     responseInfo.RiseTime, responseInfo.Overshoot))
+legend('2-DOF PID', '1-DOF PID', 'Location', 'southeast')
 grid on
 
 nexttile
 plot(controlTime, controlStep, 'LineWidth', 1.2)
+hold on
+plot(oneDofControlTime, oneDofControlStep, 'LineWidth', 1.2)
+hold off
 xlabel('Time (s)')
 ylabel('u')
 title('Control effort')
+legend('2-DOF PID', '1-DOF PID', 'Location', 'northeast')
 grid on
 
 %% Sensitivity

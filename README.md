@@ -90,6 +90,115 @@ Where:
 - A `systune` design can meet the three numbers and still be a poor controller. Here the price was a settling time of about 32 s.
 - The same pole-placement gains miss the overshoot limit when the derivative acts on the reference step. Applying proportional and derivative action to the measurement, and integral action to the error, meets the limit without giving up the sensitivity margin.
 
+---
+
+# Part 2 – Kalman Filter and Exponential Moving Average
+
+## Summary
+This part works out when a scalar Kalman filter is an exponential moving average, and where that stops. Start-up is one place. A ramp is the other. `kalman-filter-vs-ema/kalman_vs_ema.m` runs the filters in base MATLAB, checks the steady gain with `idare` from the Control System Toolbox, and writes four portrait figures.
+
+## Project Overview
+A random walk measured in white noise has a constant steady-state gain. With that gain the Kalman update is an exponential moving average, same estimate on every step. While the variance is still large the gain is larger, so the Kalman filter moves first and the moving average catches up later. On a ramp both of those filters lag by the same amount. A second state for velocity removes the lag. The lag belongs to the random-walk model.
+
+### Key Features
+- **One noise draw**: seed 1, shared by the Kalman filter and the moving average.
+- **Three gain checks**: closed form, Riccati iteration, and `idare`.
+- **Ramp**: the same moving average, the one-state filter, and a constant-velocity filter.
+- **Portrait figures**: 1080 by 1350, one message each.
+
+## Steady-State Update
+The scalar random walk is
+
+$$
+x_{k+1} = x_k + w_k, \qquad y_k = x_k + v_k
+$$
+
+Where:
+- $x_k$ is the state.
+- $y_k$ is the measurement.
+- $w_k \sim N(0,~Q)$ is the process noise.
+- $v_k \sim N(0,~R)$ is the measurement noise.
+
+$F = 1$, so the predict step does not move the estimate. The update is
+
+$$
+\hat{x} = \hat{x} + K(y - \hat{x}) = (1 - K)\hat{x} + Ky
+$$
+
+In steady state the predicted variance is the positive root of $P^2 - QP - QR = 0$:
+
+$$
+P^{-}_{\infty} = \frac{Q + \sqrt{Q^2 + 4QR}}{2}, \qquad K_{\infty} = \frac{P^{-}_{\infty}}{P^{-}_{\infty} + R}
+$$
+
+The update is then an exponential moving average with weight $\alpha = K_{\infty}$.
+
+## Simulation Setup
+Each case calls `rng(1, 'twister')` before it draws noise, so either case reproduces on its own. The random walk draws process noise and then measurement noise. The ramp resets the seed and draws measurement noise only.
+
+- **Process noise** $Q$: 0.01
+- **Measurement noise** $R$: 1
+- **Steps**: 2000, indexed from $k = 0$
+- **Sample time**: 1
+- **Truth at** $k = 0$: 5 for the random walk, and $x_k = 0.05k$ for the ramp
+- **Filter start**: estimate 0, variance $P_0 = 10$
+- **Velocity model**: $F = [1,~T_s;~0,~1]$, $H = [1,~0]$, process noise $10^{-6}$ times $[T_s^3/3,~T_s^2/2;~T_s^2/2,~T_s]$, $P_0 = 10I$, velocity prior 0
+
+### How to run
+From the repository folder:
+
+```matlab
+run(fullfile('kalman-filter-vs-ema', 'kalman_vs_ema.m'))
+```
+
+The script writes the PNGs under `kalman-filter-vs-ema/figures/` and stops if a gain check or a ramp check fails.
+
+## Results and Performance
+MATLAB R2024a, seed 1. The gain numbers do not depend on the seed.
+
+### Highlights
+- **Steady gain** $K_{\infty}$: 0.095125. The closed form, the Riccati recursion (158 iterations from $P_0$), and `idare(1, 1, Q, R)` agree through 12 digits. For this scalar filter `idare` returns the predicted variance, and its gain output is $K_{\infty}$.
+- **Gain at** $k = 0$: 0.909
+- **Within** $10^{-3}$ of $K_{\infty}$: from $k = 26$. At $k = 50$, $K = 0.095132$.
+- **Constant-gain filter against the moving average**: maximum absolute difference $1.24 \times 10^{-14}$, on the whole record.
+- **Time-varying filter against the moving average**: $2.68 \times 10^{-2}$ for $k \ge 50$, $8.25 \times 10^{-9}$ for $k \ge 200$, $1.24 \times 10^{-14}$ for $k \ge 1000$. The gap stays under $10^{-9}$ from $k = 222$.
+- **Theoretical ramp lag** $v(1-\alpha)/\alpha$: 0.4756
+- **Simulated lag** for $k \ge 1000$, truth minus estimate: 0.394 for the moving average and 0.394 for the one-state filter. Those two estimates differ by at most $8.53 \times 10^{-14}$ on that window.
+- **Two-state mean error** for $k \ge 1000$, estimate minus truth: $+0.083$
+
+### What moved with the seed
+A separate check, different seed, had an EMA lag near 0.46 and a two-state mean error near $-0.02$. Seed 1 does not reproduce those two averages. Over $k \ge 1000$ the measurements sit 0.080 above the ramp. Subtract that mean from the theoretical lag and the result is 0.396, against a simulated lag of 0.394. The two-state error sits 0.003 above the same noise mean. Shorter slices of the record do the same thing: the moving-average lag tracks $v(1-\alpha)/\alpha$ minus the noise mean of the slice, and the velocity filter tracks the noise mean. A simulated lag quoted to two digits is the noise draw.
+
+$1/\alpha = 10.5$ steps is the moving-average time constant. In the first panel the orange curve is still closing on the truth out near step 40.
+
+"After the transient" also depends on the window. The gain has arrived by about step 50. The estimate gap left by the early, larger gains is still 0.027 there, and it has fallen below $10^{-9}$ by step 222. The constant-gain filter matches the moving average from step 0.
+
+### Gain against the noise ratio
+$K_{\infty}$ depends on $Q/R$ only.
+
+- **$Q/R = 10^{-4}$**: $K_{\infty} = 0.00995$
+- **$Q/R = 10^{-3}$**: $K_{\infty} = 0.03113$
+- **$Q/R = 10^{-2}$**: $K_{\infty} = 0.095125$
+- **$Q/R = 10^{-1}$**: $K_{\infty} = 0.2702$
+- **$Q/R = 1$**: $K_{\infty} = 0.6180$
+
+![After start-up, the Kalman filter is an EMA](kalman-filter-vs-ema/figures/random_walk_kf_and_ema.png)
+
+![The gain settles at the EMA weight](kalman-filter-vs-ema/figures/kalman_gain.png)
+
+![Random-walk model lags a ramp. Velocity model tracks it.](kalman-filter-vs-ema/figures/ramp_tracking_error.png)
+
+![Q/R picks the EMA weight](kalman-filter-vs-ema/figures/alpha_from_qr.png)
+
+## Files
+- **`kalman-filter-vs-ema/kalman_vs_ema.m`**: random walk, ramp, gain checks, and the four figures.
+
+## Key Takeaways
+- With $F = 1$, a constant Kalman gain is an exponential moving average, $\alpha = K_{\infty}$, to roundoff.
+- The time-varying filter uses a large gain at start-up. It matches the moving average after that gain has settled and the early difference has died out, here by about step 220 for a difference under $10^{-9}$.
+- On a ramp the one-state filter lags by $v(1-\alpha)/\alpha$, the same lag as the moving average. The missing state is velocity.
+- The constant-velocity filter tracks the ramp. Over a finite window its average error follows the average of the measurement noise.
+
 ## Author
 This project is developed by Simone Bertoni. Learn more about my work on my personal website - [Simone Bertoni - Control Lab](https://simonebertonilab.com/).
 
